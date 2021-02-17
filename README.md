@@ -69,7 +69,7 @@ $ python main.py --mode train --dataset BRATS --crop_size 256 --image_size 256 -
                  --log_dir brats_syn_256_lambda0.1/logs \
                  --model_save_dir brats_syn_256_lambda0.1/models \
                  --result_dir brats_syn_256_lambda0.1/results \
-                 --batch_size 8 --num_workers 4 --lambda_id 0.1 --num_iters 10000
+                 --batch_size 8 --num_workers 4 --lambda_id 0.1 --num_iters 300000
 ```
 
 ### 4. Testing
