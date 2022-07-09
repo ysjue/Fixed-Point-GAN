@@ -63,15 +63,23 @@ $ python main.py --mode train --dataset CelebA --image_size 128 --c_dim 5 \
 Training on BRATS dataset
 
 ```bash
-$ python main.py --mode train --dataset BRATS --crop_size 256 --image_size 256 --c_dim 1 \
-                 --image_dir data/brats/syn \
-                 --sample_dir brats_syn_256_lambda0.1/samples \
-                 --log_dir brats_syn_256_lambda0.1/logs \
-                 --model_save_dir brats_syn_256_lambda0.1/models \
-                 --result_dir brats_syn_256_lambda0.1/results \
-                 --batch_size 8 --num_workers 4 --lambda_id 0.1 --num_iters 300000
+$ python main.py --mode train --dataset BRATS --crop_size 256 --image_size [128,192] --c_dim 1 \
+                 --image_dir /data/shuojue/data/felix_3mm \
+                 --sample_dir /data/shuojue/code/Fixed-Point-GAN/with_mask/samples \
+                 --log_dir /data/shuojue/code/Fixed-Point-GAN/with_mask/logs \
+                 --model_save_dir /data/shuojue/code/Fixed-Point-GAN/with_mask/models \
+                 --result_dir /data/shuojue/code/Fixed-Point-GAN/with_mask/results \
+                 --batch_size 64 --num_workers 8 --lambda_id 0.1 --num_iters 300000
 ```
-
+```bash
+$ python main.py --mode train --dataset BRATS --crop_size 256 --image_size [128,192] --c_dim 1 \
+                 --image_dir /data/shuojue/data/felix \
+                 --sample_dir /data/shuojue/code/Fixed-Point-GAN/samples \
+                 --log_dir /data/shuojue/code/Fixed-Point-GAN/logs/log_test \
+                 --model_save_dir /data/shuojue/code/Fixed-Point-GAN/models \
+                 --result_dir /data/shuojue/code/Fixed-Point-GAN/results \
+                 --batch_size 64 --num_workers 8 --lambda_id 0.1 --num_iters 300000
+```
 ### 4. Testing
 
 Testing on CelebA dataset
