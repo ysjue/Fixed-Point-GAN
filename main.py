@@ -1,4 +1,5 @@
 import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "5,6"
 import argparse
 from solver import Solver
 from data_loader import get_loader
@@ -24,7 +25,7 @@ def main(config):
 
     # Data loader.
     data_loader = None
-
+    valid_data_loader = None
     if config.dataset in ['CelebA']:
         data_loader = get_loader(config.image_dir, config.attr_path, config.selected_attrs,
                                    config.crop_size, config.image_size, config.batch_size,
@@ -35,24 +36,28 @@ def main(config):
         data_loader = get_loader(config.image_dir, None, None,
                                    config.crop_size, config.image_size, config.batch_size,
                                    'BRATS', config.mode, config.num_workers)
-
+        if config.mode == 'train':
+            valid_data_loader = get_loader(config.image_dir, None, None,
+                                    config.crop_size, config.image_size, config.batch_size,
+                                    'BRATS', 'valid', config.num_workers)
+        
 
     elif config.dataset in ['Directory']:
         data_loader = get_loader(config.image_dir, None, None,
                                  config.crop_size, config.image_size, config.batch_size,
                                  'Directory', config.mode, config.num_workers)
-
         
     # Solver for training and testing Fixed-Point GAN.
-    solver = Solver(data_loader, config)
+
+    solver = Solver(data_loader, valid_data_loader=valid_data_loader, config=config)
     
 
     if config.mode == 'train':
         if config.dataset in ['CelebA', 'BRATS', 'Directory']:
             solver.train()
     elif config.mode == 'test':
-        if config.dataset in ['CelebA', 'Directory']:
-            solver.test()
+        if config.dataset in ['BRATS']: 
+            solver.test_brats()
     elif config.mode == 'test_brats':
         if config.dataset in ['BRATS']:
             solver.test_brats()
@@ -65,7 +70,7 @@ if __name__ == '__main__':
     parser.add_argument('--c_dim', type=int, default=5, help='dimension of domain labels (1st dataset)')
     parser.add_argument('--c2_dim', type=int, default=8, help='dimension of domain labels (2nd dataset)')
     parser.add_argument('--crop_size', type=int, default=178, help='crop size for the images')
-    parser.add_argument('--image_size', type=int, default=128, help='image resolution')
+    parser.add_argument('--image_size', type=list, default=[128,192], help='image resolution')
     parser.add_argument('--g_conv_dim', type=int, default=64, help='number of conv filters in the first layer of G')
     parser.add_argument('--d_conv_dim', type=int, default=64, help='number of conv filters in the first layer of D')
     parser.add_argument('--g_repeat_num', type=int, default=6, help='number of residual blocks in G')
@@ -76,8 +81,8 @@ if __name__ == '__main__':
     parser.add_argument('--lambda_id', type=float, default=10, help='weight for identity loss')
     
     # Training configuration.
-    parser.add_argument('--dataset', type=str, default='CelebA', choices=['CelebA', 'BRATS', 'Directory'])
-    parser.add_argument('--batch_size', type=int, default=16, help='mini-batch size')
+    parser.add_argument('--dataset', type=str, default='BRATS', choices=['CelebA', 'BRATS', 'Directory'])
+    parser.add_argument('--batch_size', type=int, default=128, help='mini-batch size')
     parser.add_argument('--num_iters', type=int, default=200000, help='number of total iterations for training D')
     parser.add_argument('--num_iters_decay', type=int, default=100000, help='number of iterations for decaying lr')
     parser.add_argument('--g_lr', type=float, default=0.0001, help='learning rate for G')
@@ -108,7 +113,7 @@ if __name__ == '__main__':
     # Step size.
     parser.add_argument('--log_step', type=int, default=10)
     parser.add_argument('--sample_step', type=int, default=1000)
-    parser.add_argument('--model_save_step', type=int, default=10000)
+    parser.add_argument('--model_save_step', type=int, default=100)
     parser.add_argument('--lr_update_step', type=int, default=1000)
 
     config = parser.parse_args()

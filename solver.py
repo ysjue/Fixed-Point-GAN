@@ -9,21 +9,25 @@ import os
 import time
 import datetime
 from sklearn.cluster import KMeans
-
+import cv2
+import numpy as np
+from utils.data_process import get_largest_two_component
+from PIL import Image
+from evaluation_2d import evaluator
 
 class Solver(object):
     """Solver for training and testing Fixed-Point GAN."""
 
-    def __init__(self, data_loader, config):
+    def __init__(self, data_loader, valid_data_loader, config):
         """Initialize configurations."""
 
         # Data loader.
         self.data_loader = data_loader
-
+        self.valid_data_loader = valid_data_loader
         # Model configurations.
         self.c_dim = config.c_dim
         self.c2_dim = config.c2_dim
-        self.image_size = config.image_size
+        self.image_size = [128, 192] # config.image_size
         self.g_conv_dim = config.g_conv_dim
         self.d_conv_dim = config.d_conv_dim
         self.g_repeat_num = config.g_repeat_num
@@ -69,7 +73,11 @@ class Solver(object):
         self.build_model()
         if self.use_tensorboard:
             self.build_tensorboard()
-
+        pred_path = '/data/shuojue/code/Fixed-Point-GAN/predictions'
+        neg_lab_path = '/data/shuojue/data/felix/valid/negative_lab'
+        pos_lab_path = '/data/shuojue/data/felix/valid/positive_lab'
+        test_txt = '/data/shuojue/code/Fixed-Point-GAN/split/valid_set1.txt'
+        self.evaluator_2d = evaluator(pred_path,neg_lab_path,pos_lab_path,test_txt)
     def build_model(self):
         """Create a generator and a discriminator."""
         if self.dataset in ['CelebA', 'BRATS', 'Directory']:
@@ -232,7 +240,6 @@ class Solver(object):
             # Generate target domain labels randomly.
             rand_idx = torch.randperm(label_org.size(0))
             label_trg = label_org[rand_idx]
-
             if self.dataset in ['CelebA', 'BRATS']:
                 c_org = label_org.clone()
                 c_trg = label_trg.clone()
@@ -363,6 +370,11 @@ class Solver(object):
                 torch.save(self.G.state_dict(), G_path)
                 torch.save(self.D.state_dict(), D_path)
                 print('Saved model checkpoints into {}...'.format(self.model_save_dir))
+                # Validation
+                sen,spe = self.valid()
+                if self.use_tensorboard:
+                    self.logger.scalar_summary('Sensitivity', sen, i+1)
+                    self.logger.scalar_summary('Specificity', spe, i+1)
 
             # Decay learning rates.
             if (i+1) % self.lr_update_step == 0 and (i+1) > (self.num_iters - self.num_iters_decay):
@@ -370,56 +382,24 @@ class Solver(object):
                 d_lr -= (self.d_lr / float(self.num_iters_decay))
                 self.update_lr(g_lr, d_lr)
                 print ('Decayed learning rates, g_lr: {}, d_lr: {}.'.format(g_lr, d_lr))
+            
 
-
-    def test(self):
-        """Translate images using Fixed-Point GAN trained on a single dataset."""
-        # Load the trained generator.
-        self.restore_model(self.test_iters)
-        
-        # Set data loader.
-        if self.dataset in ['CelebA', 'Directory']:
-            data_loader = self.data_loader
-        
+                
+    
+    def valid(self):
+        data_loader = self.valid_data_loader
         with torch.no_grad():
-            for i, (x_real, c_org) in enumerate(data_loader):
-
-                # Prepare input images and target domain labels.
+            for i, (x_real, c_org, orig_image,gt, name) in enumerate(data_loader):
                 x_real = x_real.to(self.device)
-                c_trg_list = self.create_labels(c_org, self.c_dim, self.dataset, self.selected_attrs)
-
-                # Translate images.
-                x_fake_list = [x_real]
-                for c_trg in c_trg_list:
-                    x_fake_list.append(torch.tanh(x_real + self.G(x_real, c_trg)))
-
-                # Save the translated images.
-                x_concat = torch.cat(x_fake_list, dim=3)
-                result_path = os.path.join(self.result_dir, '{}-images.jpg'.format(i+1))
-                save_image(self.denorm(x_concat.data.cpu()), result_path, nrow=1, padding=0)
-                print('Saved real and fake images into {}...'.format(result_path))
-
-
-
-    def test_brats(self):
-        """Translate images using Fixed-Point GAN trained on a single dataset."""
-        # Load the trained generator.
-        self.restore_model(self.test_iters)
-        
-        # Set data loader.
-        if self.dataset in ['BRATS']:
-            data_loader = self.data_loader
-        
-        with torch.no_grad():
-            for i, (x_real, c_org) in enumerate(data_loader):
-                x_real = x_real.to(self.device)
-
+                gt     = gt.to(self.device)
                 c_trg = c_org.clone()
+                orig_image = orig_image.to(self.device)
                 c_trg[:, 0] = 0 # always to healthy              
                 c_trg_list = [c_trg.to(self.device)]
 
                 # Translate images.
-                x_fake_list = [x_real]
+                x_fake_list = [orig_image, gt]
+                
                 for c_trg in c_trg_list:
                     delta = self.G(x_real, c_trg)
                     delta_org = torch.abs(torch.tanh(delta + x_real) - x_real) - 1.0
@@ -427,25 +407,26 @@ class Solver(object):
                     delta_gray_norm = []
 
                     loc = []
-                    cls_mul = []
-
                     for indx in range(delta_gray.shape[0]):
                         temp = delta_gray[indx, :, :] + 1.0  
-                        tempimg_th = np.percentile(temp, 99)
+                        tempimg_th = 0.48 # np.percentile(temp, 99.7)
                         tempimg = np.float32(temp >= tempimg_th)
-                        temploc = np.reshape(tempimg, (self.image_size*self.image_size, 1))
+                        # temploc = np.reshape(tempimg, (self.image_size[0]*self.image_size[1], 1))
+                        # kmeans = KMeans(n_clusters=2, random_state=0).fit(temploc)
+                        # labels = kmeans.predict(temploc)
 
-                        kmeans = KMeans(n_clusters=2, random_state=0).fit(temploc)
-                        labels = kmeans.predict(temploc)
-
-                        recreated_loc = self.recreate_image(kmeans.cluster_centers_, labels, self.image_size, self.image_size)
-                        recreated_loc = ((recreated_loc - np.min(recreated_loc)) / (np.max(recreated_loc) - np.min(recreated_loc)))
-
-                        loc.append(recreated_loc)
+                        # recreated_loc = self.recreate_image(kmeans.cluster_centers_, labels, self.image_size[0], self.image_size[1])
+                        # recreated_loc = ((recreated_loc - np.min(recreated_loc)) / (np.max(recreated_loc) - np.min(recreated_loc)))
+                     
+                        pp_loc = self.post_processing(tempimg)
+                        pred_file_path = '/data/shuojue/code/Fixed-Point-GAN/predictions'
+                        pp_loc = np.uint8(pp_loc>0) 
+                        Image.fromarray(pp_loc).save(os.path.join(pred_file_path, name[indx]))
+                        loc.append(pp_loc)
                         delta_gray_norm.append( tempimg )
 
-
-                    loc = np.array(loc, dtype=np.float32)[:, :, :, 0]
+                    # status_map = np.array(status_map)
+                    loc = np.array(loc, dtype=np.float32)
                     delta_gray_norm = np.array(delta_gray_norm)
 
                     loc = (loc * 2.0) - 1.0
@@ -454,7 +435,97 @@ class Solver(object):
                     x_fake_list.append( torch.from_numpy(np.repeat(delta_gray[:, np.newaxis, :, :], 3, axis=1)).to(self.device) ) # difference map
                     x_fake_list.append( torch.from_numpy(np.repeat(delta_gray_norm[:, np.newaxis, :, :], 3, axis=1)).to(self.device) ) # localization thershold
                     x_fake_list.append( torch.from_numpy(np.repeat(loc[:, np.newaxis, :, :], 3, axis=1)).to(self.device) ) # localization kmeans
-                    x_fake_list.append( torch.tanh(delta + x_real) ) # generated image
+                    gen_image = torch.tanh(delta + x_real)
+                    generated_img = orig_image.clone()
+                    generated_img[gen_image>0] = gen_image[gen_image > 0]
+                    x_fake_list.append( gen_image) #torch.tanh(delta + x_real) ) # generated image
+
+                # Save the translated images.
+                x_concat = torch.cat(x_fake_list, dim=3)
+                result_path = os.path.join(self.result_dir, '{}-images.jpg'.format(i+1))
+                save_image(self.denorm(x_concat.data.cpu()), result_path, nrow=1, padding=0)
+                print('Saved real and fake images into {}...'.format(result_path))
+            dict = self.evaluator_2d()
+            print(dict['sen'], dict['spe'])
+            return dict['sen'], dict['spe']
+
+    def post_processing(self,img_npy, threshold = 3):
+        k = threshold
+        if np.sum(img_npy) == 0:
+            return img_npy
+        # print('---------',np.sum(img_npy))
+        img_npy = get_largest_two_component(img_npy)
+        # print('---------', img_npy.shape)
+ 
+        # kernel = np.ones((k,k),np.uint8)
+        # opening = cv2.morphologyEx(img_npy, cv2.MORPH_OPEN,  kernel, iterations=1)
+        # img_npy = cv2.morphologyEx(opening, cv2.MORPH_CLOSE, kernel, iterations=1)
+        
+        return img_npy 
+
+    def test_brats(self):
+        """Translate images using Fixed-Point GAN trained on a single dataset."""
+        # Load the trained generator.
+        self.restore_model(self.test_iters)
+
+        # Set data loader.
+        if self.dataset in ['BRATS']:
+            data_loader = self.data_loader
+        
+        
+        with torch.no_grad():
+            for i, (x_real, c_org, orig_image,gt, name) in enumerate(data_loader):
+                x_real = x_real.to(self.device)
+                gt     = gt.to(self.device)
+                c_trg = c_org.clone()
+                orig_image = orig_image.to(self.device)
+                c_trg[:, 0] = 0 # always to healthy              
+                c_trg_list = [c_trg.to(self.device)]
+
+                # Translate images.
+                x_fake_list = [orig_image, gt]
+                
+                for c_trg in c_trg_list:
+                    delta = self.G(x_real, c_trg)
+                    delta_org = torch.abs(torch.tanh(delta + x_real) - x_real) - 1.0
+                    delta_gray = np.mean(delta_org.data.cpu().numpy(), axis=1)
+                    delta_gray_norm = []
+
+                    loc = []
+                    cls_mul = []
+                    status_map = []
+                    for indx in range(delta_gray.shape[0]):
+                        temp = delta_gray[indx, :, :] + 1.0  
+                        tempimg_th = 0.48 # np.percentile(temp, 99.7)
+                        tempimg = np.float32(temp >= tempimg_th)
+                        # temploc = np.reshape(tempimg, (self.image_size[0]*self.image_size[1], 1))
+                        # kmeans = KMeans(n_clusters=2, random_state=0).fit(temploc)
+                        # labels = kmeans.predict(temploc)
+
+                        # recreated_loc = self.recreate_image(kmeans.cluster_centers_, labels, self.image_size[0], self.image_size[1])
+                        # recreated_loc = ((recreated_loc - np.min(recreated_loc)) / (np.max(recreated_loc) - np.min(recreated_loc)))
+                     
+                        pp_loc = self.post_processing(tempimg)
+                        pred_file_path = '/data/shuojue/code/Fixed-Point-GAN/predictions'
+                        pp_loc = np.uint8(pp_loc>0) 
+                        Image.fromarray(pp_loc).save(os.path.join(pred_file_path, name[indx]))
+                        loc.append(pp_loc)
+                        delta_gray_norm.append( tempimg )
+
+                    # status_map = np.array(status_map)
+                    loc = np.array(loc, dtype=np.float32)
+                    delta_gray_norm = np.array(delta_gray_norm)
+
+                    loc = (loc * 2.0) - 1.0
+                    delta_gray_norm = (delta_gray_norm * 2.0) - 1.0
+
+                    x_fake_list.append( torch.from_numpy(np.repeat(delta_gray[:, np.newaxis, :, :], 3, axis=1)).to(self.device) ) # difference map
+                    x_fake_list.append( torch.from_numpy(np.repeat(delta_gray_norm[:, np.newaxis, :, :], 3, axis=1)).to(self.device) ) # localization thershold
+                    x_fake_list.append( torch.from_numpy(np.repeat(loc[:, np.newaxis, :, :], 3, axis=1)).to(self.device) ) # localization kmeans
+                    gen_image = torch.tanh(delta + x_real)
+                    generated_img = orig_image.clone()
+                    generated_img[gen_image>0] = gen_image[gen_image > 0]
+                    x_fake_list.append( gen_image) #torch.tanh(delta + x_real) ) # generated image
 
                 # Save the translated images.
                 x_concat = torch.cat(x_fake_list, dim=3)

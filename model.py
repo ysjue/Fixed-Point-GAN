@@ -72,14 +72,17 @@ class Discriminator(nn.Module):
             layers.append(nn.Conv2d(curr_dim, curr_dim*2, kernel_size=4, stride=2, padding=1))
             layers.append(nn.LeakyReLU(0.01))
             curr_dim = curr_dim * 2
-
-        kernel_size = int(image_size / np.power(2, repeat_num))
+        
+        kernel_size = np.uint8(image_size / np.power(2, repeat_num))
         self.main = nn.Sequential(*layers)
         self.conv1 = nn.Conv2d(curr_dim, 1, kernel_size=3, stride=1, padding=1, bias=False)
         self.conv2 = nn.Conv2d(curr_dim, c_dim, kernel_size=kernel_size, bias=False)
         
     def forward(self, x):
         h = self.main(x)
+        # print('-----------------x', x.shape)
+        # print('-----------------h', h.shape)
         out_src = self.conv1(h)
         out_cls = self.conv2(h)
+        # print('-----------------cls', out_cls.shape)
         return out_src, out_cls.view(out_cls.size(0), out_cls.size(1))

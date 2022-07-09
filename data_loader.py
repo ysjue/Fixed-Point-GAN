@@ -6,7 +6,9 @@ import torch
 import os
 import random
 from glob import glob
-
+import numpy as np
+import torch.nn.functional as F
+from scipy import ndimage
 
 class CelebA(data.Dataset):
     """Dataset class for the CelebA dataset."""
@@ -90,34 +92,64 @@ class BRATS_SYN(data.Dataset):
         """Load BRATS dataset"""
         
         # Load test dataset
-        test_neg = glob(os.path.join(self.image_dir, 'test', 'negative', '*jpg'))
-        test_pos = glob(os.path.join(self.image_dir, 'test', 'positive', '*jpg'))
+        prefix = self.mode
+        test_neg = glob(os.path.join(self.image_dir, prefix, 'negative_img', '*jpg'))
+        test_pos = glob(os.path.join(self.image_dir,  prefix, 'positive_img', '*jpg'))
 
         for filename in test_neg:
-            self.test_dataset.append([filename, [0]])
+            mask_filename = filename.replace('negative_img', 'negative_lab')
+            self.test_dataset.append([filename, [0], mask_filename])
 
         for filename in test_pos:
-            self.test_dataset.append([filename, [1]])
+            mask_filename = filename.replace('positive_img', 'positive_lab')
+            self.test_dataset.append([filename, [1], mask_filename])
 
 
         # Load train dataset
-        train_neg = glob(os.path.join(self.image_dir, 'train', 'negative', '*jpg'))
-        train_pos = glob(os.path.join(self.image_dir, 'train', 'positive', '*jpg'))
-
+        train_neg = glob(os.path.join(self.image_dir, 'train', 'negative_img', '*jpg'))
+        train_pos = glob(os.path.join(self.image_dir, 'train', 'positive_img', '*jpg'))
+        
         for filename in train_neg:
-            self.train_dataset.append([filename, [0]])
+            mask_filename = filename.replace('negative_img', 'negative_lab')
+            self.train_dataset.append([filename, [0], mask_filename])
 
         for filename in train_pos:
-            self.train_dataset.append([filename, [1]])
+            mask_filename = filename.replace('positive_img', 'positive_lab')
+            self.train_dataset.append([filename, [1], mask_filename])
 
         print('Finished loading the BRATS dataset...')
 
     def __getitem__(self, index):
         """Return one image and its corresponding attribute label."""
         dataset = self.train_dataset if self.mode == 'train' else self.test_dataset
-        filename, label = dataset[index]
+        filename, label, mask_filename = dataset[index]
+        name = mask_filename.split('/')[-1]
         image = Image.open(filename)
-        return self.transform(image), torch.FloatTensor(label)
+        mask = Image.open(mask_filename)
+        Image2Tensor = T.ToTensor()
+        mask = Image2Tensor(mask)
+        
+        pancreas_mask = (mask > 0).numpy()
+        # origin_pancreas_mask = (mask == 1).numpy()
+        struct = ndimage.generate_binary_structure(2, 2)
+        pancreas_mask = ndimage.binary_dilation(pancreas_mask[0], struct,iterations= 5).astype(np.float32)
+        image=image.convert('RGB')
+        orig_image = self.transform(image)
+        image = orig_image * torch.from_numpy(pancreas_mask[None,:,:])
+        label_mask = torch.from_numpy((mask >= 3.0/255.0).numpy())
+        pancreas_mask = torch.from_numpy((mask == 1.0/255.0).numpy())
+        gt = orig_image.clone()
+
+        gt[0, label_mask[0]] = 0
+        gt[1, label_mask[0]] = 255
+        gt[2, label_mask[0]] = 0
+        gt[0, pancreas_mask[0]] = 255
+        gt[1, pancreas_mask[0]] = 0
+        gt[2, pancreas_mask[0]] = 0
+        if self.mode == 'train':
+            return image, torch.FloatTensor(label)
+        else:
+            return image, torch.FloatTensor(label), orig_image, gt, name
 
     def __len__(self):
         """Return the number of images."""
@@ -130,10 +162,10 @@ def get_loader(image_dir, attr_path, selected_attrs, crop_size=178, image_size=1
     transform = []
     if mode == 'train':
         transform.append(T.RandomHorizontalFlip())
-    transform.append(T.CenterCrop(crop_size))
-    transform.append(T.Resize(image_size))
+    # transform.append(T.CenterCrop(crop_size))
+    # transform.append(T.Resize(image_size))
     transform.append(T.ToTensor())
-    transform.append(T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
+    # transform.append(T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
     transform = T.Compose(transform)
 
     if dataset == 'CelebA':
@@ -145,6 +177,6 @@ def get_loader(image_dir, attr_path, selected_attrs, crop_size=178, image_size=1
 
     data_loader = data.DataLoader(dataset=dataset,
                                   batch_size=batch_size,
-                                  shuffle=(mode=='train'),
+                                  shuffle=True, # (mode=='train'),
                                   num_workers=num_workers)
     return data_loader
